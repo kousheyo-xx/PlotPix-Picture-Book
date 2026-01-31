@@ -25,17 +25,17 @@ Features
 
 ## Dependencies:
 
-google-generativeai
-gradio
-python-dotenv
-Pillow
-gTTS
+- google-generativeai
+- gradio
+- python-dotenv
+- Pillow
+- gTTS
 
 Created with ❤️ by Kousheyo and Jayshree
 
 ## Screenshots:
 
-![Screenshot 1](SS1.png)
+![Screenshot 1](SS.png)
 ![Screenshot 2](SS2.png)
 ![Screenshot 3](SS3.png)
 
