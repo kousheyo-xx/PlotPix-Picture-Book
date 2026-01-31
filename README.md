@@ -29,12 +29,16 @@ google-generativeai
 gradio
 python-dotenv
 Pillow
+gTTS
 
 Created with ❤️ by Kousheyo and Jayshree
 
 ## Screenshots:
 
-![alt text](ss1.png)
+![Screenshot 1](SS1.png)
+![Screenshot 2](SS2.png)
+![Screenshot 3](SS3.png)
+
 ## Socials:
 
 Instagram: @kousheyoxx._ @lem0nade._.xyz
@@ -44,5 +48,5 @@ LinkedIn: https://www.linkedin.com/in/kousheyo-banerjee-ab9440392/
 
 Github: https://github.com/kousheyo-xx
 
-PS: This is our first project and we are still learning, so please be kind and let us know if you have any questions or suggestions.
+PS: This was our first project as well as our first hackathon and we are still learning, so please be kind and let us know if you have any questions or suggestions.
 

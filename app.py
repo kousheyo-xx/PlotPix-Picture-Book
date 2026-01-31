@@ -12,7 +12,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # --- CONFIG ---
-TEXT_MODEL = "gemini-2.5-flash-lite"
+TEXT_MODEL = "gemini-2.5-flash"
 IMAGE_MODEL = "gemini-2.5-flash-image"
 
 SAFETY_SETTINGS = {
@@ -67,6 +67,27 @@ def get_page_count_text(current, total):
 
 # --- CORE LOGIC ---
 
+def finish_story(history_state):
+    if not history_state:
+        raise gr.Error("You haven't started a story yet!")
+    
+    # Calculate how many pages were made
+    stories_count = sum(1 for x in history_state if isinstance(x, str) and "STORY:" in x)
+    
+    final_text = f"""
+    # 🌟 THE END 🌟
+    
+    **What a wonderful adventure!** You created a beautiful book with {stories_count} pages. 
+    
+    Hope to see you again soon for another magical story! ✨
+    """
+    
+    # Generate a celebratory audio
+    audio_path = text_to_speech("The End. What a wonderful adventure! Thanks for reading.")
+    
+    # We return a 'None' image or a special 'The End' graphic if you have one
+    return None, final_text, audio_path, stories_count
+
 def navigate_pages(direction, current_idx, history):
     if not history: return None, "### No pages yet!", None, 0, ""
     
@@ -96,11 +117,12 @@ def generate_story_step(user_data, history_state):
     uploaded_files = user_data.get("files", [])
 
     if not user_text and not uploaded_files:
-        return None, "### Please enter an idea! ✨", None, history_state, user_data, 0, ""
+        # Instead of returning a string, we raise a clear Error modal
+        raise gr.Error("Please enter an idea to keep the magic going! ✨")
 
     model = genai.GenerativeModel(model_name=TEXT_MODEL, system_instruction=SYSTEM_PROMPT, safety_settings=SAFETY_SETTINGS)
     
-    # Build context: User messages are index 0, 3, 6... AI are 1, 4, 7...
+    # Build context
     messages = []
     for i, item in enumerate(history_state):
         if isinstance(item, str):
@@ -117,6 +139,7 @@ def generate_story_step(user_data, history_state):
         response = model.generate_content(messages)
         raw_text = response.text
         
+        # Parsing Logic
         try:
             story = raw_text.split("STORY:")[1].split("IMAGE_PROMPT:")[0].strip()
             image_prompt = raw_text.split("IMAGE_PROMPT:")[1].strip()
@@ -126,10 +149,12 @@ def generate_story_step(user_data, history_state):
             image_prompt = raw_text
             page_title = "The Next Chapter"
 
+        # Image Generation
         prev_img = next((item for item in reversed(history_state) if isinstance(item, Image.Image)), None)
         img_out = generate_image_gemini(image_prompt, prev_img)
         audio_path = text_to_speech(story)
         
+        # Update History
         history_state.append(user_text or "[Magic Wand]")
         history_state.append(raw_text)
         if isinstance(img_out, Image.Image):
@@ -139,14 +164,21 @@ def generate_story_step(user_data, history_state):
         new_idx = stories_count - 1
         
         display_text = f"## {page_title}\n\n{story}"
+        
+        # Handle Image Quota specifically
         if img_out == "quota_error":
-            display_text += "\n\n⚠️ *Image limit reached!*"
+            gr.Warning("The artist is taking a nap! (Image limit reached). We'll keep the story going with text.")
             img_out = None
             
         return img_out, display_text, audio_path, history_state, {"text": "", "files": []}, new_idx, get_page_count_text(new_idx, stories_count)
 
     except Exception as e:
-        return None, f"❌ Error: {str(e)}", None, history_state, user_data, 0, ""
+        # THIS IS THE MAGIC PART:
+        error_msg = str(e).lower()
+        if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
+            raise gr.Error("🌟 The Magic Book is resting for today (Daily Limit Reached). Try again tomorrow!")
+        else:
+            raise gr.Error(f"Oops! A forest sprite caused an error: {str(e)}")
 
 # --- CUSTOM UI ---
 
@@ -157,6 +189,11 @@ kids_theme = gr.themes.Soft(
 )
 
 custom_css = """
+    .finish-btn {
+        background: #E1BEE7 !important; /* Light Lavender */
+        color: #7B1FA2 !important;
+        border: 2px solid #7B1FA2 !important;
+    }
     .clear-btn {
         border-radius: 50px !important;
         border: 2px solid #D1C4E9 !important; /* Soft Purple */
@@ -219,8 +256,14 @@ with gr.Blocks(theme=kids_theme, css=custom_css) as demo:
     with gr.Row():
         submit_btn = gr.Button("✨ Turn the Page ✨", variant="primary", size="lg", elem_classes="magic-btn")
         clear_btn = gr.Button("🔄 New Story", variant="secondary",elem_classes="clear-btn")
-
+        finish_btn = gr.Button("🏰 The End", variant="secondary", elem_classes="clear-btn")
     # --- EVENTS ---
+    finish_btn.click(
+        finish_story,
+        [history_state],
+        [main_image, story_display, audio_player, current_page_idx]
+    )
+
     submit_btn.click(
         generate_story_step, 
         [msg, history_state], 
