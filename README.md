@@ -31,13 +31,13 @@ Features
 - Pillow
 - gTTS
 
-Created with ❤️ by Kousheyo and Jayshree
+
 
 ## Screenshots:
 
-![Screenshot 1](SS.png)
-![Screenshot 2](SS2.png)
 ![Screenshot 3](SS3.png)
+![Screenshot 2](SS2.png)
+![Screenshot 1](SS.png)
 
 ## Socials:
 
@@ -50,3 +50,4 @@ Github: https://github.com/kousheyo-xx
 
 PS: This was our first project as well as our first hackathon and we are still learning, so please be kind and let us know if you have any questions or suggestions.
 
+Created with ❤️ by Kousheyo and Jayshree
