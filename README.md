@@ -34,8 +34,10 @@ Created with ❤️ by Kousheyo and Jayshree
 ## Socials:
 
 Instagram: @kousheyoxx._ @lem0nade._.xyz
+
 LinkedIn: https://www.linkedin.com/in/kousheyo-banerjee-ab9440392/
           https://www.linkedin.com/in/jayshree-4b963928b/
+
 Github: https://github.com/kousheyo-xx
 
 PS: This is our first project and we are still learning, so please be kind and let us know if you have any questions or suggestions.
