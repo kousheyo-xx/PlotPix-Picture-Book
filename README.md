@@ -7,7 +7,7 @@ Features
 - AI-generated illustrations (with quota-aware fallback to manual prompts)
 - Upload reference images for consistent characters across pages
 - Built with Gradio for a clean web UI
-- Uses Nano Banana for image generation
+- Uses Gemini 2.5 Image for image generation
 - Uses Gemini 2.5 Flash for text generation
 
 ## Demo on how to Run Locally:
@@ -31,6 +31,10 @@ python-dotenv
 Pillow
 
 Created with ❤️ by Kousheyo and Jayshree
+
+## Screenshots:
+
+![alt text](ss1.png)
 ## Socials:
 
 Instagram: @kousheyoxx._ @lem0nade._.xyz

@@ -7,7 +7,6 @@ import io
 import base64
 from gtts import gTTS
 from dotenv import load_dotenv
-from pipreqs import pipreqs
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
