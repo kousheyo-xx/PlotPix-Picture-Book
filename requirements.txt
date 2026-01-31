@@ -2,3 +2,4 @@ google-generativeai
 gradio
 python-dotenv
 Pillow
+gTTS

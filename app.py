@@ -5,14 +5,16 @@ from PIL import Image
 import os
 import io
 import base64
+from gtts import gTTS
 from dotenv import load_dotenv
+from pipreqs import pipreqs
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-TEXT_MODEL = "gemini-2.5-flash"          # Text/story generation (or try "gemini-1.5-flash-8b" if available)
-IMAGE_MODEL = "gemini-2.5-flash-image"   # Nano Banana – fast image gen
-# For higher quality (if you have access/billing): IMAGE_MODEL = "gemini-3-pro-image-preview"
+# --- CONFIG ---
+TEXT_MODEL = "gemini-2.5-flash-lite"
+IMAGE_MODEL = "gemini-2.5-flash-image"
 
 SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -21,232 +23,228 @@ SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-system_prompt = """You are a magical children's picture book creator.
+SYSTEM_PROMPT = """You are a magical children's picture book creator.
 Create ONE page at a time in a warm, age 4–8 friendly style.
 
 Output EXACTLY this format:
-
-PAGE {page_number}: [Short catchy title – max 6 words]
-
+PAGE {page_number}: [Short catchy title]
 STORY:
-2–4 simple, engaging sentences. Use vivid action, emotions, repetition and wonder.
-
+2–4 simple, engaging sentences. Use vivid action and wonder.
 IMAGE_PROMPT:
-A detailed visual description for illustration (2-3 sentences describing the scene, characters, mood, and art style)."""
+A detailed visual description for illustration (art style: whimsical watercolor, soft colors)."""
+
+# --- HELPERS ---
+
+def text_to_speech(text):
+    try:
+        clean_text = text.replace('#', '').replace('*', '').strip()
+        tts = gTTS(text=clean_text, lang='en', slow=False)
+        audio_path = "story_audio.mp3"
+        tts.save(audio_path)
+        return audio_path
+    except: return None
 
 def generate_image_gemini(prompt, reference_image=None):
-    """Generate image using Gemini Nano Banana"""
     try:
-        model = genai.GenerativeModel(
-            model_name=IMAGE_MODEL,
-            safety_settings=SAFETY_SETTINGS
-        )
-
-        full_prompt = (
-            prompt + 
-            ", children's picture book illustration, watercolor style, cute, colorful, whimsical, storybook art, "
-            "soft lighting, no text in image, aspect ratio 3:4 for portrait book page"
-        )
-
+        model = genai.GenerativeModel(model_name=IMAGE_MODEL, safety_settings=SAFETY_SETTINGS)
+        full_prompt = (prompt + ", children's picture book illustration, watercolor style, cute, whimsical, no text.")
         content = [full_prompt]
-
         if reference_image:
             content.insert(0, reference_image)
-            content[0] = (
-                "Maintain consistent character designs, colors, style, mood, and overall aesthetic from the reference image. "
-                + full_prompt
-            )
+            content[0] = "Maintain character consistency from this reference: " + full_prompt
 
         response = model.generate_content(content)
-
         for part in response.parts:
-            if hasattr(part, 'inline_data') and part.inline_data.mime_type.startswith('image/'):
-                image_data = part.inline_data.data
-                image_bytes = base64.b64decode(image_data)
-                img = Image.open(io.BytesIO(image_bytes))
-                print("Gemini Nano Banana image generated successfully!")
-                return img
-
-        print("No image data in response")
+            if hasattr(part, 'inline_data'):
+                return Image.open(io.BytesIO(base64.b64decode(part.inline_data.data)))
         return None
-
     except Exception as e:
-        error_str = str(e)
-        if "429" in error_str or "quota" in error_str.lower():
-            print("Quota exceeded in image generation")
-            return "quota_error"
-        print(f"Gemini image error: {error_str}")
+        if "429" in str(e) or "quota" in str(e).lower(): return "quota_error"
         return None
 
-def generate_story_step(user_data, history):
+def get_page_count_text(current, total):
+    if total == 0: return ""
+    return f"✨ **Page {current + 1} of {total}** ✨"
+
+# --- CORE LOGIC ---
+
+def navigate_pages(direction, current_idx, history):
+    if not history: return None, "### No pages yet!", None, 0, ""
+    
+    # Filter for story blocks (every story block starts with "PAGE")
+    stories = [i for i, item in enumerate(history) if isinstance(item, str) and "STORY:" in item]
+    total_pages = len(stories)
+    
+    new_idx = max(0, min(current_idx + direction, total_pages - 1))
+    story_raw = history[stories[new_idx]]
+    
+    try:
+        story_text = story_raw.split("STORY:")[1].split("IMAGE_PROMPT:")[0].strip()
+    except:
+        story_text = story_raw
+        
+    img_out = None
+    # The image is usually saved right after the text block in history
+    if stories[new_idx] + 1 < len(history) and isinstance(history[stories[new_idx] + 1], Image.Image):
+        img_out = history[stories[new_idx] + 1]
+    
+    audio_path = text_to_speech(story_text)
+    display_markdown = f"## {story_raw.split('STORY:')[0].strip()}\n\n{story_text}"
+    return img_out, display_markdown, audio_path, new_idx, get_page_count_text(new_idx, total_pages)
+
+def generate_story_step(user_data, history_state):
     user_text = (user_data["text"] or "").strip()
     uploaded_files = user_data.get("files", [])
 
-    if not user_text and not uploaded_files and history:
-        user_text = "Continue the story with the next page."
-
     if not user_text and not uploaded_files:
-        return history, {"text": "", "files": []}
+        return None, "### Please enter an idea! ✨", None, history_state, user_data, 0, ""
 
-    text_model = genai.GenerativeModel(
-        model_name=TEXT_MODEL,
-        system_instruction=system_prompt,
-        safety_settings=SAFETY_SETTINGS
-    )
-
+    model = genai.GenerativeModel(model_name=TEXT_MODEL, system_instruction=SYSTEM_PROMPT, safety_settings=SAFETY_SETTINGS)
+    
+    # Build context: User messages are index 0, 3, 6... AI are 1, 4, 7...
     messages = []
-    for msg in history:
-        if isinstance(msg["content"], str):
-            role = "user" if msg["role"] == "user" else "model"
-            messages.append({"role": role, "parts": [msg["content"]]})
-        # Skip images in text history
+    for i, item in enumerate(history_state):
+        if isinstance(item, str):
+            role = "model" if "STORY:" in item else "user"
+            messages.append({"role": role, "parts": [item]})
 
-    current_parts = [user_text] if user_text else ["Create the next page."]
-
+    current_input = [user_text] if user_text else ["Create the next page of our story."]
     if uploaded_files:
-        for path in uploaded_files[:2]:
-            try:
-                img = Image.open(path)
-                current_parts.append(img)
-            except:
-                pass
-        if any(isinstance(p, Image.Image) for p in current_parts):
-            current_parts.append("Keep consistent character design, colors and mood from reference image(s).")
+        current_input.append(Image.open(uploaded_files[0]))
 
-    messages.append({"role": "user", "parts": current_parts})
+    messages.append({"role": "user", "parts": current_input})
 
     try:
-        response = text_model.generate_content(messages)
-        text = response.text.strip() if response.text else "No response."
+        response = model.generate_content(messages)
+        raw_text = response.text
+        
+        try:
+            story = raw_text.split("STORY:")[1].split("IMAGE_PROMPT:")[0].strip()
+            image_prompt = raw_text.split("IMAGE_PROMPT:")[1].strip()
+            page_title = raw_text.split("STORY:")[0].strip()
+        except:
+            story = raw_text
+            image_prompt = raw_text
+            page_title = "The Next Chapter"
 
-        lines = text.split("\n")
-        page_title = f"Page {len(history)//2 + 1}"
-        story = ""
-        image_prompt = ""
+        prev_img = next((item for item in reversed(history_state) if isinstance(item, Image.Image)), None)
+        img_out = generate_image_gemini(image_prompt, prev_img)
+        audio_path = text_to_speech(story)
+        
+        history_state.append(user_text or "[Magic Wand]")
+        history_state.append(raw_text)
+        if isinstance(img_out, Image.Image):
+            history_state.append(img_out)
 
-        current_section = None
-        for line in lines:
-            line = line.strip()
-            if line.startswith("PAGE"):
-                page_title = line
-            elif line.startswith("STORY:") or line == "STORY":
-                current_section = "story"
-            elif line.startswith("IMAGE_PROMPT:") or line == "IMAGE_PROMPT":
-                current_section = "image"
-            elif current_section == "story" and line and not line.startswith("IMAGE"):
-                story += line + " "
-            elif current_section == "image" and line:
-                image_prompt += line + " "
-
-        story = story.strip() or "A beautiful moment..."
-        image_prompt = image_prompt.strip()
-
-        final_prompt = image_prompt if image_prompt else story[:150]
-
-        user_display = user_text or "[Reference image(s) uploaded]"
-        history.append({"role": "user", "content": user_display})
-
-        story_content = f"### {page_title}\n\n{story}\n\n🎨 *Generating illustration...*"
-        history.append({"role": "assistant", "content": story_content})
-
-        yield history, {"text": "", "files": []}
-
-        previous_img = None
-        for msg in reversed(history[:-1]):
-            if isinstance(msg.get("content"), Image.Image):
-                previous_img = msg["content"]
-                break
-
-        generated_image = generate_image_gemini(final_prompt, previous_img)
-
-        if generated_image == "quota_error":
-            history[-1]["content"] = (
-                f"### {page_title}\n\n{story}\n\n"
-                "⚠️ **Quota limit reached for image generation.**\n"
-                "Your free daily requests are used up. Wait until tomorrow (resets daily)"
-                f"**Manual prompt you can use right now in gemini.google.com (select 'Create images'):**\n{final_prompt}"
-            )
-        elif generated_image:
-            history[-1]["content"] = f"### {page_title}\n\n{story}"
-            history.append({"role": "assistant", "content": generated_image})
-        else:
-            history[-1]["content"] = (
-                f"### {page_title}\n\n{story}\n\n"
-                f"❌ *Image generation failed (check console for details).*\n"
-                f"**Try this prompt manually in Gemini web:** {final_prompt}"
-            )
-
-        yield history, {"text": "", "files": []}
+        stories_count = sum(1 for x in history_state if isinstance(x, str) and "STORY:" in x)
+        new_idx = stories_count - 1
+        
+        display_text = f"## {page_title}\n\n{story}"
+        if img_out == "quota_error":
+            display_text += "\n\n⚠️ *Image limit reached!*"
+            img_out = None
+            
+        return img_out, display_text, audio_path, history_state, {"text": "", "files": []}, new_idx, get_page_count_text(new_idx, stories_count)
 
     except Exception as e:
-        error_str = str(e)
-        if "429" in error_str or "quota" in error_str.lower():
-            msg = (
-                "⚠️ **Quota exceeded!** Your free tier daily limit (likely 20 requests) is reached for today.\n"
-                "Wait until tomorrow for reset."
-            )
-        else:
-            msg = f"❌ Error: {error_str}\n\nTry again or check API key / model access!"
-        history.append({"role": "assistant", "content": msg})
-        yield history, {"text": "", "files": []}
+        return None, f"❌ Error: {str(e)}", None, history_state, user_data, 0, ""
 
-with gr.Blocks() as demo:
-    gr.Markdown("""
-    # 📖✨ PlotPix Picture Book Creator 📖✨
-    
-    **Powered by Gemini**
-    
-    Create magical children's stories with AI-generated text AND illustrations!
-    Describe what happens next (or upload refs) — all powered by Gemini.
-    
-    ⏱️ *Note: Free tier has daily limits (~20 requests/day)*
-    """)
+# --- CUSTOM UI ---
 
-    chatbot = gr.Chatbot(
-        label="Your Picture Book",
-        height=600
-    )
+kids_theme = gr.themes.Soft(
+    primary_hue="pink",
+    secondary_hue="yellow",
+    font=[gr.themes.GoogleFont("Comic Neue"), "sans-serif"]
+)
 
+custom_css = """
+    .clear-btn {
+        border-radius: 50px !important;
+        border: 2px solid #D1C4E9 !important; /* Soft Purple */
+        background: white !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 4px 4px 0px #D1C4E9 !important;
+        color: #9575CD !important;
+        font-weight: bold !important;
+    }
+    
+    .clear-btn:hover {
+        transform: scale(1.05);
+        background: #F3E5F5 !important;
+        box-shadow: 2px 2px 0px #D1C4E9 !important;
+    }
+    .gradio-container { background: linear-gradient(180deg, #FFF0F5 0%, #E0F7FA 100%); }
+    .book-frame { 
+        background: white; border: 6px solid #FFB6C1; border-radius: 30px; 
+        padding: 20px; box-shadow: 15px 15px 0px #FFB6C1; 
+    }
+    .page-counter { 
+        text-align: center; color: #FF69B4; font-size: 1.1em; 
+        font-weight: bold; background: #FFF0F5; border-radius: 12px; padding: 4px;
+    }
+    .nav-btn {
+        border-radius: 50px !important; border: 2px solid #FFB6C1 !important;
+        background: white !important; transition: all 0.3s ease !important;
+        box-shadow: 4px 4px 0px #FFB6C1 !important; color: #FF69B4 !important;
+    }
+    .nav-btn:hover { transform: scale(1.1) rotate(-2deg); background: #FFF0F5 !important; }
+    .magic-btn {
+        background: linear-gradient(90deg, #FF69B4, #FFB6C1) !important;
+        color: white !important; border-radius: 20px !important; font-size: 1.3em !important;
+        box-shadow: 0px 6px 0px #D05090 !important;
+    }
+    .magic-btn:active { transform: translateY(3px); box-shadow: 0px 2px 0px #D05090 !important; }
+"""
+
+with gr.Blocks(theme=kids_theme, css=custom_css) as demo:
+    gr.Markdown("# 📖✨ PlotPix: My Magical Picture Book ✨📖")
+    
+    history_state = gr.State([])
+    current_page_idx = gr.State(0)
+
+    with gr.Row(elem_classes="book-frame"):
+        with gr.Column(scale=1):
+            main_image = gr.Image(label="Illustration", interactive=False, height=450)
+        with gr.Column(scale=1):
+            story_display = gr.Markdown("### Welcome, Little Author!\nDescribe your adventure to begin.")
+            audio_player = gr.Audio(label="🔊 Listen!", autoplay=True)
+            
+            with gr.Column():
+                page_counter = gr.Markdown("", elem_classes="page-counter")
+                with gr.Row():
+                    prev_btn = gr.Button("👈 Back", elem_classes="nav-btn")
+                    next_btn = gr.Button("Next 👉", elem_classes="nav-btn")
+
+    msg = gr.MultimodalTextbox(label="What happens next?", submit_btn=False, lines=2)
+    
     with gr.Row():
-        msg = gr.MultimodalTextbox(
-            label="What happens next?",
-            placeholder="The little fox finds a glowing crystal cave...",
-            file_types=["image"],
-            file_count="multiple",
-            lines=2,
-        )
-    
-    with gr.Row():
-        submit_btn = gr.Button("📝 Generate Next Page", variant="primary", size="lg")
-        clear_btn = gr.Button("🔄 Start New Story", variant="secondary")
+        submit_btn = gr.Button("✨ Turn the Page ✨", variant="primary", size="lg", elem_classes="magic-btn")
+        clear_btn = gr.Button("🔄 New Story", variant="secondary",elem_classes="clear-btn")
 
-    gr.Markdown("""
-    💡 **Tip:** Upload a character image on page 1 for better consistency across pages!  
-    If you hit quota limits, wait 24h.
-    """)
-
+    # --- EVENTS ---
     submit_btn.click(
-        generate_story_step,
-        inputs=[msg, chatbot],
-        outputs=[chatbot, msg]
+        generate_story_step, 
+        [msg, history_state], 
+        [main_image, story_display, audio_player, history_state, msg, current_page_idx, page_counter]
     )
     
-    msg.submit(
-        generate_story_step,
-        inputs=[msg, chatbot],
-        outputs=[chatbot, msg]
+    prev_btn.click(
+        lambda idx, hist: navigate_pages(-1, idx, hist), 
+        [current_page_idx, history_state], 
+        [main_image, story_display, audio_player, current_page_idx, page_counter]
     )
-
+    
+    next_btn.click(
+        lambda idx, hist: navigate_pages(1, idx, hist), 
+        [current_page_idx, history_state], 
+        [main_image, story_display, audio_player, current_page_idx, page_counter]
+    )
+    
     clear_btn.click(
-        lambda: ([], {"text":"", "files":[]}),
-        None,
-        [chatbot, msg]
+        lambda: (None, "### Let's start a new adventure!", None, [], 0, ""), 
+        None, 
+        [main_image, story_display, audio_player, history_state, current_page_idx, page_counter]
     )
 
 if __name__ == "__main__":
-    demo.launch(
-        server_port=7860,
-        show_error=True,
-        share=True,
-        theme=gr.themes.Soft()
-    )
+    demo.launch(debug=True)
